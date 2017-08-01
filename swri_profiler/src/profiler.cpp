@@ -2,6 +2,8 @@
 #include <swri_profiler/profiler.h>
 #include <ros/publisher.h>
 
+#include <boost/foreach.hpp>
+
 #include <swri_profiler_msgs/ProfileIndex.h>
 #include <swri_profiler_msgs/ProfileIndexArray.h>
 #include <swri_profiler_msgs/ProfileData.h>
@@ -11,9 +13,14 @@ namespace spm = swri_profiler_msgs;
 
 namespace swri_profiler
 {
+#if __cpluplus >= 201103L
+  typedef std::unordered_map<std::string, swri_profiler_msgs::ProfileData> profile_map_type;
+#else
+  typedef std::map<std::string, swri_profiler_msgs::ProfileData> profile_map_type;
+#endif
 // Define/initialize static member variables for the Profiler class.
-std::unordered_map<std::string, Profiler::ClosedInfo> Profiler::closed_blocks_;
-std::unordered_map<std::string, Profiler::OpenInfo> Profiler::open_blocks_;
+Profiler::closed_map_type Profiler::closed_blocks_;
+Profiler::open_map_type Profiler::open_blocks_;
 boost::thread_specific_ptr<Profiler::TLS> Profiler::tls_;
 SpinLock Profiler::lock_;
 
@@ -30,7 +37,7 @@ static boost::thread profiler_thread_;
 // update to reduce the amount of copying done (which might block the
 // threads doing actual work).  The incremental snapshots are
 // collected here in all_closed_blocks_;
-static std::unordered_map<std::string, spm::ProfileData> all_closed_blocks_;
+static profile_map_type all_closed_blocks_;
 
 static ros::Duration durationFromWall(const ros::WallDuration &src)
 {
@@ -95,21 +102,21 @@ void Profiler::collectAndPublish()
   static ros::WallTime last_now = ros::WallTime::now();
   
   // Grab a snapshot of the current state.  
-  std::unordered_map<std::string, ClosedInfo> new_closed_blocks;
-  std::unordered_map<std::string, OpenInfo> threaded_open_blocks;
+  closed_map_type new_closed_blocks;
+  open_map_type threaded_open_blocks;
   ros::WallTime now = ros::WallTime::now();
   ros::Time ros_now = ros::Time::now();  
   {
     SpinLockGuard guard(lock_);
     new_closed_blocks.swap(closed_blocks_);
-    for (auto &pair : open_blocks_) {
+    BOOST_FOREACH(open_map_type::value_type& pair, open_blocks_) {
       threaded_open_blocks[pair.first].t0 = pair.second.t0;
       pair.second.last_report_time = now;
     }
   }
 
   // Reset all relative max durations.
-  for (auto &pair : all_closed_blocks_) {
+  BOOST_FOREACH(profile_map_type::value_type& pair, all_closed_blocks_) {
     pair.second.rel_total_duration = ros::Duration(0);
     pair.second.rel_max_duration = ros::Duration(0);
   }
@@ -118,11 +125,11 @@ void Profiler::collectAndPublish()
   bool update_index = false;
 
   // Merge the new stats into the absolute stats
-  for (auto const &pair : new_closed_blocks) {
-    const auto &label = pair.first;
-    const auto &new_info = pair.second;
+  BOOST_FOREACH(closed_map_type::value_type& pair, new_closed_blocks) {
+    const std::string &label = pair.first;
+    const ClosedInfo &new_info = pair.second;
 
-    auto &all_info = all_closed_blocks_[label];
+    spm::ProfileData &all_info = all_closed_blocks_[label];
 
     if (all_info.key == 0) {
       update_index = true;
@@ -138,10 +145,10 @@ void Profiler::collectAndPublish()
   
   // Combine the open blocks from all threads into a single
   // map.
-  std::unordered_map<std::string, spm::ProfileData> combined_open_blocks;
-  for (auto const &pair : threaded_open_blocks) {
-    const auto &threaded_label = pair.first;
-    const auto &threaded_info = pair.second;
+  profile_map_type combined_open_blocks;
+  BOOST_FOREACH(const open_map_type::value_type& pair, threaded_open_blocks) {
+    const std::string &threaded_label = pair.first;
+    const OpenInfo &threaded_info = pair.second;
 
     size_t slash_index = threaded_label.find('/');
     if (slash_index == std::string::npos) {
@@ -151,11 +158,11 @@ void Profiler::collectAndPublish()
 
     ros::Duration duration = durationFromWall(now - threaded_info.t0);
     
-    const auto label = threaded_label.substr(slash_index+1);
-    auto &new_info = combined_open_blocks[label];
+    const std::string label = threaded_label.substr(slash_index+1);
+    spm::ProfileData &new_info = combined_open_blocks[label];
 
     if (new_info.key == 0) {
-      auto &all_info = all_closed_blocks_[label];
+      spm::ProfileData &all_info = all_closed_blocks_[label];
       if (all_info.key == 0) {
         update_index = true;
         all_info.key = all_closed_blocks_.size();
@@ -179,8 +186,8 @@ void Profiler::collectAndPublish()
     index.header.stamp = timeFromWall(now);
     index.header.frame_id = ros::this_node::getName();
     index.data.resize(all_closed_blocks_.size());
-    
-    for (auto const &pair : all_closed_blocks_) {
+
+    BOOST_FOREACH(const profile_map_type::value_type& pair, all_closed_blocks_) {
       size_t i = pair.second.key - 1;
       index.data[i].key = pair.second.key;
       index.data[i].label = pair.first;
@@ -195,8 +202,8 @@ void Profiler::collectAndPublish()
   msg.rostime_stamp = ros_now;
   
   msg.data.resize(all_closed_blocks_.size());
-  for (auto &pair : all_closed_blocks_) {
-    auto const &item = pair.second;
+  BOOST_FOREACH(profile_map_type::value_type& pair, all_closed_blocks_) {
+    const spm::ProfileData& item = pair.second;
     size_t i = item.key - 1;
 
     msg.data[i].key = item.key;
@@ -206,8 +213,8 @@ void Profiler::collectAndPublish()
     msg.data[i].rel_max_duration = item.rel_max_duration;
   }
 
-  for (auto &pair : combined_open_blocks) {
-    auto const &item = pair.second;
+  BOOST_FOREACH(profile_map_type::value_type& pair, combined_open_blocks) {
+    const spm::ProfileData& item = pair.second;
     size_t i = item.key - 1;
     msg.data[i].abs_call_count += item.abs_call_count;
     msg.data[i].abs_total_duration += item.abs_total_duration;

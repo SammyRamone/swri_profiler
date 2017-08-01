@@ -3,15 +3,22 @@
 
 #include <algorithm>
 #include <limits>
+#if __cpluplus >= 201103L
 #include <unordered_map>
 #include <atomic>
+#else
+#include <map>
+#endif
 
 #include <ros/time.h>
 #include <ros/console.h>
 #include <diagnostic_updater/diagnostic_updater.h>
 
+#include <boost/thread/lock_guard.hpp>
+
 namespace swri_profiler
 {
+#if __cplusplus >= 201103L
 class SpinLock
 {
   std::atomic_flag locked_;
@@ -37,6 +44,10 @@ class SpinLockGuard
   SpinLockGuard(SpinLock &lock) : lock_(lock) { lock_.acquire(); }
   ~SpinLockGuard() { lock_.release(); }
 };
+#else
+typedef boost::mutex SpinLock;
+typedef boost::lock_guard<boost::mutex> SpinLockGuard;
+#endif
 
 class Profiler
 {
@@ -60,6 +71,14 @@ class Profiler
     ClosedInfo() : count(0) {}
   };
 
+#if __cpluplus >= 201103L
+  typedef std::unordered_map<std::string, OpenInfo> open_map_type;
+  typedef std::unordered_map<std::string, ClosedInfo> closed_map_type;
+#else
+  typedef std::map<std::string, OpenInfo> open_map_type;
+  typedef std::map<std::string, ClosedInfo> closed_map_type;
+#endif
+
   // Thread local storage for the profiler.
   struct TLS
   {
@@ -75,12 +94,12 @@ class Profiler
   // executing.  It maps a thread_prefix + stack_address to an OpenInfo
   // block.  This is stored as a shared static variable instead of a
   // TLS because the publishing thread needs to access it.
-  static std::unordered_map<std::string, OpenInfo> open_blocks_;
+  static open_map_type open_blocks_;
 
   // closed_blocks_ stored data for profiled blocks that have finished
   // executing.  It maps a stack_address to a ClosedInfo block.  This
   // map is cleared out regularly.
-  static std::unordered_map<std::string, ClosedInfo> closed_blocks_;
+  static closed_map_type closed_blocks_;
 
   // tls_ stores the thread local storage so that the profiler can
   // maintain a separate stack for each thread.
@@ -135,7 +154,7 @@ class Profiler
     {
       SpinLockGuard guard(lock_);
 
-      auto const open_it = open_blocks_.find(open_index);
+      open_map_type::iterator open_it = open_blocks_.find(open_index);
       if (open_it == open_blocks_.end()) {
         ROS_ERROR("Missing entry for '%s' in open_index. Profiler is probably corrupted.",
                   name.c_str());

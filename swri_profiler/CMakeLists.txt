@@ -16,7 +16,7 @@ set(RUNTIME_DEPS
 )
 
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
 
 ### Catkin ###
 find_package(catkin REQUIRED COMPONENTS ${BUILD_DEPS})
