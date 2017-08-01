@@ -715,7 +715,7 @@ var update = function() {
 //   updateCanvasArc();
 // }
 
-var ros = new ROSLIB.Ros({url : 'ws://localhost:9091'});
+var ros = new ROSLIB.Ros({url : 'ws://' + window.location.hostname + ':9091'});
 var ros_adapter = undefined;
 var profile_data = new GlobalProfile();
 
