@@ -74,7 +74,7 @@ else()
   find_package(std_msgs REQUIRED)
   find_package(swri_profiler_msgs REQUIRED)
 
-  add_library(${PROJECT_NAME}
+  add_library(${PROJECT_NAME} SHARED
     src/profiler.cpp
   )
   target_compile_definitions(${PROJECT_NAME}
